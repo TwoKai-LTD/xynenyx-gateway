@@ -101,6 +101,9 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 			// Create a new request with context
 			reqWithCtx := r.WithContext(ctx)
 
+			// Log the target URL for debugging
+			log.Printf("Proxying request to %s: %s %s", serviceName, targetURL, reqWithCtx.URL.Path)
+
 			// Serve the request
 			proxy.ServeHTTP(statusWriter, reqWithCtx)
 
@@ -112,7 +115,7 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 
 			// Only count 5xx errors as failures (not 4xx client errors)
 			if statusWriter.statusCode >= 500 {
-				log.Printf("Request to %s failed with status %d", serviceName, statusWriter.statusCode)
+				log.Printf("Request to %s failed with status %d (target: %s, path: %s)", serviceName, statusWriter.statusCode, targetURL, reqWithCtx.URL.Path)
 				return http.ErrAbortHandler
 			}
 			// 4xx errors are client errors, not service failures - don't count them
