@@ -44,11 +44,15 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
 	if state == StateOpen {
 		// Check if timeout has passed to try half-open
 		cb.mu.Lock()
-		if time.Since(cb.lastFailTime) >= cb.timeout {
+		timeSinceFail := time.Since(cb.lastFailTime)
+		// Reduce timeout check - if lastFailTime is zero or timeout passed, allow retry
+		if cb.lastFailTime.IsZero() || timeSinceFail >= cb.timeout {
 			cb.state = StateHalfOpen
+			cb.failures = 0 // Reset failures when transitioning to half-open
 			cb.mu.Unlock()
 		} else {
 			cb.mu.Unlock()
+			// Return error - circuit breaker is still open
 			return errors.New("circuit breaker is open")
 		}
 	}
@@ -93,6 +97,30 @@ func (cb *CircuitBreaker) GetState() CircuitState {
 	return cb.state
 }
 
+// Reset manually resets the circuit breaker to closed state
+func (cb *CircuitBreaker) Reset() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.state = StateClosed
+	cb.failures = 0
+	cb.lastFailTime = time.Time{}
+}
+
+// ForceHalfOpen forces the circuit breaker to half-open state (for testing recovery)
+func (cb *CircuitBreaker) ForceHalfOpen() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.state = StateHalfOpen
+	cb.lastFailTime = time.Time{} // Reset timeout so it can try immediately
+}
+
+// GetFailures returns the current failure count
+func (cb *CircuitBreaker) GetFailures() int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.failures
+}
+
 // CircuitBreakerManager manages circuit breakers for multiple services
 type CircuitBreakerManager struct {
 	breakers map[string]*CircuitBreaker
@@ -134,5 +162,31 @@ func (cbm *CircuitBreakerManager) GetBreaker(service string) *CircuitBreaker {
 func (cbm *CircuitBreakerManager) GetState(service string) CircuitState {
 	breaker := cbm.GetBreaker(service)
 	return breaker.GetState()
+}
+
+// Reset resets a service's circuit breaker
+func (cbm *CircuitBreakerManager) Reset(service string) {
+	breaker := cbm.GetBreaker(service)
+	state := breaker.GetState()
+	// If open or half-open, force to closed state to allow immediate requests
+	if state == StateOpen || state == StateHalfOpen {
+		// Force to closed instead of half-open for immediate availability
+		breaker.Reset() // This sets to closed
+	} else {
+		// If already closed, just ensure it stays closed
+		breaker.Reset()
+	}
+}
+
+// GetAllStates returns the state of all circuit breakers
+func (cbm *CircuitBreakerManager) GetAllStates() map[string]CircuitState {
+	cbm.mu.RLock()
+	defer cbm.mu.RUnlock()
+	
+	states := make(map[string]CircuitState)
+	for service, breaker := range cbm.breakers {
+		states[service] = breaker.GetState()
+	}
+	return states
 }
 

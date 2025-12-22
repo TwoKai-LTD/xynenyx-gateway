@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/edwardsims/xynenyx-gateway/config"
+	"github.com/edwardsims/xynenyx-gateway/middleware"
 )
 
 // HealthResponse represents the health check response
@@ -31,7 +33,7 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReadyHandler handles readiness check requests
-func ReadyHandler(cfg *config.Config) http.HandlerFunc {
+func ReadyHandler(cfg *config.Config, circuitBreaker *middleware.CircuitBreakerManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		services := make(map[string]string)
 		allHealthy := true
@@ -40,6 +42,13 @@ func ReadyHandler(cfg *config.Config) http.HandlerFunc {
 		agentHealthy := checkServiceHealth(cfg.AgentServiceURL + "/health")
 		if agentHealthy {
 			services["agent"] = "healthy"
+			// Always reset circuit breaker on successful health check (aggressive reset)
+			state := circuitBreaker.GetState("agent")
+			if state != middleware.StateClosed {
+				circuitBreaker.Reset("agent")
+				newState := circuitBreaker.GetState("agent")
+				log.Printf("Circuit breaker reset for agent service: %v -> %v", state, newState)
+			}
 		} else {
 			services["agent"] = "unhealthy"
 			allHealthy = false
@@ -49,6 +58,10 @@ func ReadyHandler(cfg *config.Config) http.HandlerFunc {
 		ragHealthy := checkServiceHealth(cfg.RAGServiceURL + "/health")
 		if ragHealthy {
 			services["rag"] = "healthy"
+			// Reset circuit breaker on successful health check
+			if circuitBreaker.GetState("rag") == middleware.StateOpen {
+				circuitBreaker.Reset("rag")
+			}
 		} else {
 			services["rag"] = "unhealthy"
 			allHealthy = false
@@ -58,6 +71,10 @@ func ReadyHandler(cfg *config.Config) http.HandlerFunc {
 		llmHealthy := checkServiceHealth(cfg.LLMServiceURL + "/health")
 		if llmHealthy {
 			services["llm"] = "healthy"
+			// Reset circuit breaker on successful health check
+			if circuitBreaker.GetState("llm") == middleware.StateOpen {
+				circuitBreaker.Reset("llm")
+			}
 		} else {
 			services["llm"] = "unhealthy"
 			allHealthy = false
@@ -76,6 +93,36 @@ func ReadyHandler(cfg *config.Config) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+// CircuitBreakerStateHandler handles circuit breaker state requests
+func CircuitBreakerStateHandler(circuitBreaker *middleware.CircuitBreakerManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		states := circuitBreaker.GetAllStates()
+		
+		// Convert CircuitState to string
+		stateMap := make(map[string]string)
+		for service, state := range states {
+			switch state {
+			case middleware.StateClosed:
+				stateMap[service] = "closed"
+			case middleware.StateOpen:
+				stateMap[service] = "open"
+			case middleware.StateHalfOpen:
+				stateMap[service] = "half-open"
+			default:
+				stateMap[service] = "unknown"
+			}
+		}
+
+		response := map[string]interface{}{
+			"states": stateMap,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 	}
 }

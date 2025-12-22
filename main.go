@@ -39,16 +39,24 @@ func main() {
 	router.Use(middleware.CORSMiddleware(cfg))
 	router.Use(middleware.LoggingMiddleware)
 	router.Use(middleware.RateLimitMiddleware(rateLimiter))
-	router.Use(middleware.AuthMiddleware(cfg))
 
 	// Health check endpoints (no auth required)
 	router.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
-	router.HandleFunc("/ready", handlers.ReadyHandler(cfg)).Methods("GET")
+	router.HandleFunc("/ready", handlers.ReadyHandler(cfg, circuitBreaker)).Methods("GET")
+	
+	// Gateway management endpoints (no auth, registered on main router before subrouter)
+	// Use HandleFunc with exact path to ensure it's registered before subrouter
+	router.HandleFunc("/gateway/circuit-breaker/state", handlers.CircuitBreakerStateHandler(circuitBreaker)).Methods("GET")
+	router.HandleFunc("/gateway/circuit-breaker/reset", handlers.CircuitBreakerResetHandler(circuitBreaker)).Methods("POST")
+
+	// Apply auth middleware only to API routes
+	apiRouter := router.PathPrefix("/api").Subrouter()
+	apiRouter.Use(middleware.AuthMiddleware(cfg))
 
 	// API routes (auth required via middleware)
-	router.PathPrefix("/api/agent").Handler(handlers.ProxyHandler(cfg, "agent", circuitBreaker))
-	router.PathPrefix("/api/rag").Handler(handlers.ProxyHandler(cfg, "rag", circuitBreaker))
-	router.PathPrefix("/api/llm").Handler(handlers.ProxyHandler(cfg, "llm", circuitBreaker))
+	apiRouter.PathPrefix("/agent").Handler(handlers.ProxyHandler(cfg, "agent", circuitBreaker))
+	apiRouter.PathPrefix("/rag").Handler(handlers.ProxyHandler(cfg, "rag", circuitBreaker))
+	apiRouter.PathPrefix("/llm").Handler(handlers.ProxyHandler(cfg, "llm", circuitBreaker))
 
 	// Create HTTP server
 	srv := &http.Server{

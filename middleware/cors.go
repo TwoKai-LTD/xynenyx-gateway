@@ -13,25 +13,27 @@ func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 
-			// Check if origin is allowed
-			if isOriginAllowed(origin, cfg.CORSOrigins) {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
-			}
-
 			// Handle preflight requests
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID, X-User-ID")
+				if isOriginAllowed(origin, cfg.CORSOrigins) {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID, X-User-ID, Accept")
+				w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
 				w.Header().Set("Access-Control-Max-Age", "3600")
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 
-			// Set CORS headers for actual requests
+			// Set CORS headers for actual requests (only once)
 			if origin != "" && isOriginAllowed(origin, cfg.CORSOrigins) {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				// Only set if not already set (prevent duplicates)
+				if w.Header().Get("Access-Control-Allow-Origin") == "" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
 			}
 
 			next.ServeHTTP(w, r)
