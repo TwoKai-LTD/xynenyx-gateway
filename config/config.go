@@ -41,7 +41,7 @@ type Config struct {
 // Load loads configuration from environment variables
 func Load() *Config {
 	cfg := &Config{
-		// Supabase
+		// Supabase (optional - not used for anonymous-only service)
 		SupabaseJWTSecret: getEnv("SUPABASE_JWT_SECRET", ""),
 
 		// Service URLs
@@ -75,9 +75,8 @@ func Load() *Config {
 
 // Validate checks that required configuration is present
 func (c *Config) Validate() error {
-	if c.SupabaseJWTSecret == "" {
-		return &ConfigError{Field: "SUPABASE_JWT_SECRET", Message: "required but not set"}
-	}
+	// SUPABASE_JWT_SECRET is optional for anonymous-only service
+	// No validation required
 	return nil
 }
 
