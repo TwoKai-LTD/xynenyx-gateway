@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/edwardsims/xynenyx-gateway/config"
 	"github.com/edwardsims/xynenyx-gateway/middleware"
@@ -61,6 +61,25 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
 	}
 
+	// Customize response to strip CORS headers from downstream services
+	// The gateway CORS middleware should be the only one setting CORS headers
+	originalModifyResponse := proxy.ModifyResponse
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// Strip CORS headers from downstream service response
+		// Gateway CORS middleware will set these correctly
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Allow-Methods")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		resp.Header.Del("Access-Control-Expose-Headers")
+		resp.Header.Del("Access-Control-Max-Age")
+		
+		if originalModifyResponse != nil {
+			return originalModifyResponse(resp)
+		}
+		return nil
+	}
+
 	// Customize error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "Service unavailable", http.StatusBadGateway)
@@ -70,13 +89,6 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 	breaker := circuitBreaker.GetBreaker(serviceName)
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Check circuit breaker state first
-		state := breaker.GetState()
-		if state == middleware.StateOpen {
-			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-			return
-		}
-
 		// Create context with timeout
 		ctx, cancel := context.WithTimeout(r.Context(), cfg.RequestTimeout)
 		defer cancel()
@@ -84,7 +96,7 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 		// Create a response writer wrapper to capture status
 		statusWriter := &statusResponseWriter{ResponseWriter: w}
 
-		// Execute with circuit breaker protection
+		// Execute with circuit breaker protection (Call() handles state checking and transitions)
 		err := breaker.Call(func() error {
 			// Create a new request with context
 			reqWithCtx := r.WithContext(ctx)
@@ -94,16 +106,28 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 
 			// Check for timeout
 			if ctx.Err() == context.DeadlineExceeded {
+				log.Printf("Request to %s timed out", serviceName)
 				return ctx.Err()
 			}
 
-			// Check if we got an error status
+			// Only count 5xx errors as failures (not 4xx client errors)
 			if statusWriter.statusCode >= 500 {
+				log.Printf("Request to %s failed with status %d", serviceName, statusWriter.statusCode)
 				return http.ErrAbortHandler
+			}
+			// 4xx errors are client errors, not service failures - don't count them
+			// 2xx and 3xx are successes
+			if statusWriter.statusCode < 400 {
+				log.Printf("Request to %s succeeded with status %d", serviceName, statusWriter.statusCode)
 			}
 
 			return nil
 		})
+		
+		// Log circuit breaker blocking
+		if err != nil && err.Error() == "circuit breaker is open" {
+			log.Printf("Circuit breaker blocked request to %s (state: open)", serviceName)
+		}
 
 		if err != nil {
 			// Check if it's a timeout
