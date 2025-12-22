@@ -64,7 +64,7 @@ func Load() *Config {
 		RequestTimeout: time.Duration(getEnvAsInt("REQUEST_TIMEOUT", 30)) * time.Second,
 
 		// CORS
-		CORSOrigins: parseCORSOrigins(getEnv("CORS_ORIGINS", "http://localhost:3000,https://xynenyx.com")),
+		CORSOrigins: parseCORSOrigins(getEnv("CORS_ORIGINS", "http://localhost:3000,https://xynenyx.com,https://www.xynenyx.com")),
 
 		// Logging
 		LogLevel: getEnv("LOG_LEVEL", "info"),
