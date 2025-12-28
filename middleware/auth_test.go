@@ -3,78 +3,16 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/edwardsims/xynenyx-gateway/config"
 )
-
-func TestValidateJWT(t *testing.T) {
-	secret := "test-secret-key"
-	userID := "user-123"
-
-	// Create a valid token
-	claims := &Claims{
-		UserID: userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(secret))
-	if err != nil {
-		t.Fatalf("Failed to create token: %v", err)
-	}
-
-	// Test valid token
-	validatedClaims, err := ValidateJWT(tokenString, secret)
-	if err != nil {
-		t.Fatalf("Expected valid token, got error: %v", err)
-	}
-	if validatedClaims.UserID != userID {
-		t.Errorf("Expected user ID %s, got %s", userID, validatedClaims.UserID)
-	}
-
-	// Test invalid secret
-	_, err = ValidateJWT(tokenString, "wrong-secret")
-	if err == nil {
-		t.Error("Expected error for invalid secret")
-	}
-
-	// Test expired token
-	expiredClaims := &Claims{
-		UserID: userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
-		},
-	}
-	expiredToken := jwt.NewWithClaims(jwt.SigningMethodHS256, expiredClaims)
-	expiredTokenString, _ := expiredToken.SignedString([]byte(secret))
-
-	_, err = ValidateJWT(expiredTokenString, secret)
-	if err == nil {
-		t.Error("Expected error for expired token")
-	}
-}
 
 func TestAuthMiddleware(t *testing.T) {
 	cfg := &config.Config{
 		SupabaseJWTSecret: "test-secret",
 	}
-
-	// Create a valid token
-	claims := &Claims{
-		UserID: "user-123",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString([]byte(cfg.SupabaseJWTSecret))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userID := GetUserID(r)
@@ -89,47 +27,48 @@ func TestAuthMiddleware(t *testing.T) {
 	tests := []struct {
 		name           string
 		path           string
-		authHeader     string
+		userIDHeader   string
 		expectedStatus int
+		expectedUserID string
 	}{
 		{
-			name:           "Valid token",
+			name:           "Valid X-User-ID header",
 			path:           "/api/agent/chat",
-			authHeader:     "Bearer " + tokenString,
+			userIDHeader:   "user-123",
 			expectedStatus: http.StatusOK,
+			expectedUserID: "user-123",
 		},
 		{
-			name:           "Missing Authorization header",
+			name:           "Missing X-User-ID header (generates anonymous)",
 			path:           "/api/agent/chat",
-			authHeader:     "",
-			expectedStatus: http.StatusUnauthorized,
-		},
-		{
-			name:           "Invalid token format",
-			path:           "/api/agent/chat",
-			authHeader:     "Invalid " + tokenString,
-			expectedStatus: http.StatusUnauthorized,
+			userIDHeader:   "",
+			expectedStatus: http.StatusOK,
+			expectedUserID: "", // Will be generated, check it starts with "anonymous-"
 		},
 		{
 			name:           "Health check bypass",
 			path:           "/health",
-			authHeader:     "",
+			userIDHeader:   "",
 			expectedStatus: http.StatusOK,
+			expectedUserID: "",
 		},
 		{
 			name:           "Ready check bypass",
 			path:           "/ready",
-			authHeader:     "",
+			userIDHeader:   "",
 			expectedStatus: http.StatusOK,
+			expectedUserID: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.path, nil)
-			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
+			if tt.userIDHeader != "" {
+				req.Header.Set("X-User-ID", tt.userIDHeader)
 			}
+			// Set RemoteAddr for anonymous ID generation
+			req.RemoteAddr = "127.0.0.1:12345"
 
 			rr := httptest.NewRecorder()
 			middleware := AuthMiddleware(cfg)
@@ -141,11 +80,18 @@ func TestAuthMiddleware(t *testing.T) {
 
 			// Check X-User-ID header for valid requests
 			if tt.expectedStatus == http.StatusOK && tt.path != "/health" && tt.path != "/ready" {
-				if req.Header.Get("X-User-ID") != "user-123" {
-					t.Errorf("Expected X-User-ID header, got %s", req.Header.Get("X-User-ID"))
+				actualUserID := req.Header.Get("X-User-ID")
+				if tt.expectedUserID != "" {
+					if actualUserID != tt.expectedUserID {
+						t.Errorf("Expected X-User-ID header %s, got %s", tt.expectedUserID, actualUserID)
+					}
+				} else {
+					// Should generate anonymous ID
+					if !strings.HasPrefix(actualUserID, "anonymous-") {
+						t.Errorf("Expected anonymous user ID, got %s", actualUserID)
+					}
 				}
 			}
 		})
 	}
 }
-

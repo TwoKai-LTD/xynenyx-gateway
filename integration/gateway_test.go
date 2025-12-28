@@ -1,8 +1,6 @@
 package integration
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -45,18 +43,15 @@ func TestGatewayIntegration(t *testing.T) {
 		SupabaseJWTSecret: "test-secret",
 		AgentServiceURL:   backend.URL,
 		RAGServiceURL:     backend.URL,
-		LLMServiceURL:      backend.URL,
-		RequestTimeout:     5 * time.Second,
+		LLMServiceURL:     backend.URL,
+		RequestTimeout:    5 * time.Second,
 		RateLimitRequests: 100,
-		RateLimitBurst:     10,
-		CORSOrigins:        []string{"http://localhost:3000"},
+		RateLimitBurst:    10,
+		CORSOrigins:       []string{"http://localhost:3000"},
 	}
 
-	// Create a valid JWT token for testing
-	claims := &middleware.Claims{
-		UserID: "test-user-123",
-	}
-	token := createTestToken(t, claims, cfg.SupabaseJWTSecret)
+	// Use X-User-ID header for testing (anonymous access)
+	testUserID := "test-user-123"
 
 	// Setup router with middleware
 	router := mux.NewRouter()
@@ -70,7 +65,7 @@ func TestGatewayIntegration(t *testing.T) {
 	router.Use(middleware.AuthMiddleware(cfg))
 
 	router.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
-	router.HandleFunc("/ready", handlers.ReadyHandler(cfg)).Methods("GET")
+	router.HandleFunc("/ready", handlers.ReadyHandler(cfg, circuitBreaker)).Methods("GET")
 	router.PathPrefix("/api/agent").Handler(handlers.ProxyHandler(cfg, "agent", circuitBreaker))
 
 	// Test health check (no auth)
@@ -84,10 +79,10 @@ func TestGatewayIntegration(t *testing.T) {
 		}
 	})
 
-	// Test authenticated request
+	// Test authenticated request (using X-User-ID header)
 	t.Run("AuthenticatedRequest", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/agent/health", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-User-ID", testUserID)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 
@@ -96,14 +91,15 @@ func TestGatewayIntegration(t *testing.T) {
 		}
 	})
 
-	// Test unauthorized request
-	t.Run("UnauthorizedRequest", func(t *testing.T) {
+	// Test request without X-User-ID (should generate anonymous ID)
+	t.Run("AnonymousRequest", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/agent/health", nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 
-		if rr.Code != http.StatusUnauthorized {
-			t.Errorf("Expected status 401, got %d", rr.Code)
+		// Should succeed with anonymous user ID generated
+		if rr.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", rr.Code)
 		}
 	})
 
@@ -123,14 +119,6 @@ func TestGatewayIntegration(t *testing.T) {
 			t.Error("Expected CORS header")
 		}
 	})
-}
-
-// createTestToken creates a test JWT token
-func createTestToken(t *testing.T, claims *middleware.Claims, secret string) string {
-	// Import jwt library for real token creation
-	// For integration tests, we'd use a real token from Supabase
-	// This is a placeholder - actual implementation would use github.com/golang-jwt/jwt/v5
-	return "mock-token-for-testing"
 }
 
 // TestRateLimitingIntegration tests rate limiting with multiple requests
@@ -174,11 +162,6 @@ func TestCircuitBreakerIntegration(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	cfg := &config.Config{
-		AgentServiceURL: backend.URL,
-		RequestTimeout:  5 * time.Second,
-	}
-
 	circuitBreaker := middleware.NewCircuitBreakerManager(3, 1*time.Second)
 
 	// Fail 3 times to open circuit
@@ -195,4 +178,3 @@ func TestCircuitBreakerIntegration(t *testing.T) {
 		t.Error("Expected circuit to be open")
 	}
 }
-
