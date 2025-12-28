@@ -12,6 +12,41 @@ import (
 	"github.com/edwardsims/xynenyx-gateway/middleware"
 )
 
+// writeErrorWithCORS writes an error response with CORS headers
+func writeErrorWithCORS(w http.ResponseWriter, r *http.Request, cfg *config.Config, message string, statusCode int) {
+	// Set CORS headers before writing error (matching CORS middleware logic)
+	origin := r.Header.Get("Origin")
+	if origin != "" && isOriginAllowed(origin, cfg.CORSOrigins) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(statusCode)
+	w.Write([]byte(message))
+}
+
+// isOriginAllowed checks if an origin is in the allowed list (duplicated from middleware for use here)
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	if origin == "" {
+		return false
+	}
+	if len(allowedOrigins) == 0 {
+		return true
+	}
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			return true
+		}
+		if strings.HasPrefix(allowed, "*.") {
+			domain := strings.TrimPrefix(allowed, "*")
+			if strings.HasSuffix(origin, domain) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ProxyHandler creates a reverse proxy handler for a service
 func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middleware.CircuitBreakerManager) http.HandlerFunc {
 	var targetURL string
@@ -73,7 +108,7 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 		resp.Header.Del("Access-Control-Allow-Headers")
 		resp.Header.Del("Access-Control-Expose-Headers")
 		resp.Header.Del("Access-Control-Max-Age")
-		
+
 		if originalModifyResponse != nil {
 			return originalModifyResponse(resp)
 		}
@@ -82,7 +117,7 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 
 	// Customize error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		http.Error(w, "Service unavailable", http.StatusBadGateway)
+		writeErrorWithCORS(w, r, cfg, "Service unavailable", http.StatusBadGateway)
 	}
 
 	// Get circuit breaker for this service
@@ -126,7 +161,7 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 
 			return nil
 		})
-		
+
 		// Log circuit breaker blocking
 		if err != nil && err.Error() == "circuit breaker is open" {
 			log.Printf("Circuit breaker blocked request to %s (state: open)", serviceName)
@@ -136,20 +171,20 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 			// Check if it's a timeout
 			if err == context.DeadlineExceeded {
 				if !statusWriter.written {
-					http.Error(w, "Request timeout", http.StatusGatewayTimeout)
+					writeErrorWithCORS(w, r, cfg, "Request timeout", http.StatusGatewayTimeout)
 				}
 				return
 			}
 			// Circuit breaker error
 			if err.Error() == "circuit breaker is open" {
 				if !statusWriter.written {
-					http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+					writeErrorWithCORS(w, r, cfg, "Service unavailable", http.StatusServiceUnavailable)
 				}
 				return
 			}
 			// Other errors
 			if !statusWriter.written {
-				http.Error(w, "Service error", http.StatusBadGateway)
+				writeErrorWithCORS(w, r, cfg, "Service error", http.StatusBadGateway)
 			}
 		}
 	}
@@ -186,4 +221,3 @@ func (srw *statusResponseWriter) WriteHeader(statusCode int) {
 	srw.statusCode = statusCode
 	srw.ResponseWriter.WriteHeader(statusCode)
 }
-
