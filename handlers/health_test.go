@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/edwardsims/xynenyx-gateway/config"
+	"github.com/edwardsims/xynenyx-gateway/middleware"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -37,10 +39,12 @@ func TestReadyHandler(t *testing.T) {
 		LLMServiceURL:   server.URL,
 	}
 
+	circuitBreaker := middleware.NewCircuitBreakerManager(5, 30*time.Second)
+
 	req := httptest.NewRequest("GET", "/ready", nil)
 	rr := httptest.NewRecorder()
 
-	ReadyHandler(cfg)(rr, req)
+	ReadyHandler(cfg, circuitBreaker)(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -68,4 +72,3 @@ func TestCheckServiceHealth(t *testing.T) {
 		t.Error("Expected service to be unhealthy")
 	}
 }
-
