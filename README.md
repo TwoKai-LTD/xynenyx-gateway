@@ -6,7 +6,7 @@ Go API Gateway for Xynenyx - handles authentication, rate limiting, and routing 
 
 The gateway is the single entry point for all API requests. It provides:
 
-- **JWT Validation**: Validates Supabase JWT tokens
+- **Anonymous User ID**: Extracts or generates anonymous user IDs from headers
 - **Rate Limiting**: Token bucket algorithm per user (100 requests/minute default)
 - **Request Routing**: Reverse proxy to agent, RAG, and LLM services
 - **Circuit Breakers**: Protects against cascading failures
@@ -38,7 +38,6 @@ Gateway (Port 8080)
 go mod download
 
 # Set environment variables (see .env.example)
-export SUPABASE_JWT_SECRET=your-secret
 export AGENT_SERVICE_URL=http://localhost:8001
 export RAG_SERVICE_URL=http://localhost:8002
 export LLM_SERVICE_URL=http://localhost:8003
@@ -60,10 +59,6 @@ docker run -p 8080:8080 --env-file .env xynenyx-gateway
 ## Configuration
 
 All configuration is done via environment variables. See `.env.example` for all options.
-
-### Required Variables
-
-- `SUPABASE_JWT_SECRET` - JWT secret from Supabase project settings
 
 ### Optional Variables
 
@@ -88,7 +83,7 @@ All configuration is done via environment variables. See `.env.example` for all 
 
 ### API Routes
 
-All `/api/*` routes require JWT authentication via `Authorization: Bearer <token>` header.
+All `/api/*` routes support anonymous access. The gateway automatically extracts or generates a user ID from the `X-User-ID` header.
 
 - `POST /api/agent/chat` - Chat endpoint (proxied to agent service)
 - `POST /api/agent/chat/stream` - Streaming chat
@@ -98,15 +93,14 @@ All `/api/*` routes require JWT authentication via `Authorization: Bearer <token
 
 ## Features
 
-### JWT Authentication
+### Anonymous User ID
 
-The gateway validates JWT tokens from Supabase:
+The gateway supports anonymous access with automatic user ID generation:
 
-1. Extracts token from `Authorization: Bearer <token>` header
-2. Verifies signature using Supabase JWT secret
-3. Validates expiration and issued-at claims
-4. Extracts user ID from `sub` claim
-5. Sets `X-User-ID` header for downstream services
+1. Checks for `X-User-ID` header from the frontend
+2. If not provided, generates an anonymous ID from the client's IP address
+3. Sets `X-User-ID` header for downstream services
+4. All requests are anonymous - no authentication required
 
 ### Rate Limiting
 
