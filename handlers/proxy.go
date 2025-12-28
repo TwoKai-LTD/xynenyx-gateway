@@ -97,19 +97,24 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 	}
 
 	// Customize response to strip CORS headers from downstream services
-	// The gateway CORS middleware should be the only one setting CORS headers
-	// However, we ensure CORS headers are preserved for error responses
+	// and ensure gateway CORS headers are set
 	originalModifyResponse := proxy.ModifyResponse
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// Strip CORS headers from downstream service response
-		// Gateway CORS middleware will set these correctly
-		// Note: CORS middleware runs before proxy, so headers should already be set
 		resp.Header.Del("Access-Control-Allow-Origin")
 		resp.Header.Del("Access-Control-Allow-Credentials")
 		resp.Header.Del("Access-Control-Allow-Methods")
 		resp.Header.Del("Access-Control-Allow-Headers")
 		resp.Header.Del("Access-Control-Expose-Headers")
 		resp.Header.Del("Access-Control-Max-Age")
+
+		// Get origin from request (stored in response request)
+		origin := resp.Request.Header.Get("Origin")
+		if origin != "" && isOriginAllowed(origin, cfg.CORSOrigins) {
+			// Set CORS headers on the response
+			resp.Header.Set("Access-Control-Allow-Origin", origin)
+			resp.Header.Set("Access-Control-Allow-Credentials", "true")
+		}
 
 		if originalModifyResponse != nil {
 			return originalModifyResponse(resp)
