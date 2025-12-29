@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -152,7 +153,9 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 			// Only count 5xx errors as failures (not 4xx client errors)
 			if statusWriter.statusCode >= 500 {
 				log.Printf("Request to %s failed with status %d (target: %s, path: %s)", serviceName, statusWriter.statusCode, targetURL, reqWithCtx.URL.Path)
-				return http.ErrAbortHandler
+				// Don't return ErrAbortHandler if response was already written
+				// Just return a regular error to mark the circuit breaker failure
+				return fmt.Errorf("backend returned %d", statusWriter.statusCode)
 			}
 			// 4xx errors are client errors, not service failures - don't count them
 			// 2xx and 3xx are successes
