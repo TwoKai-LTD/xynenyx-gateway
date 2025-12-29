@@ -60,8 +60,8 @@ func Load() *Config {
 		CircuitBreakerFailures: getEnvAsInt("CIRCUIT_BREAKER_FAILURES", 5),
 		CircuitBreakerTimeout:  time.Duration(getEnvAsInt("CIRCUIT_BREAKER_TIMEOUT", 30)) * time.Second,
 
-		// Request Timeout
-		RequestTimeout: time.Duration(getEnvAsInt("REQUEST_TIMEOUT", 30)) * time.Second,
+		// Request Timeout (increased for complex agent queries)
+		RequestTimeout: time.Duration(getEnvAsInt("REQUEST_TIMEOUT", 45)) * time.Second,
 
 		// CORS
 		CORSOrigins: parseCORSOrigins(getEnv("CORS_ORIGINS", "http://localhost:3000,https://xynenyx.com,https://www.xynenyx.com")),
