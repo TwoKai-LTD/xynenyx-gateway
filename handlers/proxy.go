@@ -147,14 +147,19 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 			// Check for timeout
 			if ctx.Err() == context.DeadlineExceeded {
 				log.Printf("Request to %s timed out", serviceName)
-				return ctx.Err()
+				// Only return error if response hasn't been written yet
+				if !statusWriter.written {
+					return ctx.Err()
+				}
+				// Response already written, don't return error to avoid panic
+				return nil
 			}
 
 			// Only count 5xx errors as failures (not 4xx client errors)
 			if statusWriter.statusCode >= 500 {
 				log.Printf("Request to %s failed with status %d (target: %s, path: %s)", serviceName, statusWriter.statusCode, targetURL, reqWithCtx.URL.Path)
-				// Don't return ErrAbortHandler if response was already written
-				// Just return a regular error to mark the circuit breaker failure
+				// Return error to mark circuit breaker failure
+				// Response already written by proxy, so error handling code must check statusWriter.written
 				return fmt.Errorf("backend returned %d", statusWriter.statusCode)
 			}
 			// 4xx errors are client errors, not service failures - don't count them
@@ -172,18 +177,20 @@ func ProxyHandler(cfg *config.Config, serviceName string, circuitBreaker *middle
 		}
 
 		if err != nil {
+			// If response was already written (e.g., 5xx from backend), don't try to write again
+			if statusWriter.written {
+				// Response already written, just return - don't try to write another response
+				return
+			}
+			
 			// Check if it's a timeout
 			if err == context.DeadlineExceeded {
-				if !statusWriter.written {
-					writeErrorWithCORS(w, r, cfg, "Request timeout", http.StatusGatewayTimeout)
-				}
+				writeErrorWithCORS(w, r, cfg, "Request timeout", http.StatusGatewayTimeout)
 				return
 			}
 			// Circuit breaker error
 			if err.Error() == "circuit breaker is open" {
-				if !statusWriter.written {
-					writeErrorWithCORS(w, r, cfg, "Service unavailable", http.StatusServiceUnavailable)
-				}
+				writeErrorWithCORS(w, r, cfg, "Service unavailable", http.StatusServiceUnavailable)
 				return
 			}
 			// Other errors
