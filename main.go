@@ -59,11 +59,14 @@ func main() {
 	apiRouter.PathPrefix("/llm").Handler(handlers.ProxyHandler(cfg, "llm", circuitBreaker))
 
 	// Create HTTP server
+	// WriteTimeout must be >= RequestTimeout to allow long-running requests
+	// Add buffer for network overhead
+	writeTimeout := cfg.RequestTimeout + 10*time.Second
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 
